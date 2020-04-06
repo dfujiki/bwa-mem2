@@ -101,6 +101,7 @@ typedef struct {
 	worker_t * w;
 	fpga_pci_conn pci_conn;
 	pthread_mutex_t *seedex_mut;
+	pthread_mutex_t *seedex_buf_mut;
 	int tid;
 	std::atomic_uint *done;
 } queue_coll;       // Collection of queues
@@ -3293,7 +3294,7 @@ static void fpga_worker(void *data){
 
 static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queue_t *qe) {
 	worker_t * w = qc->w;
-	const int tid = qc->tid;
+	const int tid = qc->tid % NUM_FPGA_THREADS;
 
 	uint32_t vled;
 	uint32_t vdip;
@@ -3323,6 +3324,7 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 				// memset(load_buffer + load_buffer_size,0,write_buffer_capacity);
 
 #ifdef ENABLE_FPGA
+	pthread_mutex_lock (qc->seedex_buf_mut);
 				// pthread_mutex_lock (fpga_write_mut);
 				write_to_fpga(fpga_pci_local->write_fd,(uint8_t*)load_buffer1.data(),load_buffer1.size() * sizeof(union SeedExLine),BATCH_LINE_LIMIT*64*(tid));
 				// pthread_mutex_unlock (fpga_write_mut);
@@ -3458,6 +3460,7 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 						read_scores_from_fpga(w, fpga_pci_local,qe,&f1v,0, BATCH_LINE_LIMIT*64*4 + (tid) * BATCH_LINE_LIMIT/4*64, extension_meta, qe->f1v->alnregs);
 					}
 				}
+	pthread_mutex_unlock (qc->seedex_buf_mut);
 
 #else
 				read_buffer.clear();
@@ -3940,6 +3943,10 @@ void mem_process_seqs(mem_opt_t *opt,
 		pthread_mutex_t *seedex_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t));
 		pthread_mutex_init (seedex_mut, NULL);
 
+		// SeedEx Buf Mutex
+		pthread_mutex_t *seedex_buf_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t) * NUM_FPGA_THREADS);
+		for (int j = 0; j < NUM_FPGA_THREADS; ++j) pthread_mutex_init (&seedex_buf_mut[j], NULL);
+
 		// DMA Read Mutex
 		fpga_read_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t));
 		pthread_mutex_init (fpga_read_mut, NULL);
@@ -3951,12 +3958,13 @@ void mem_process_seqs(mem_opt_t *opt,
 			qc[j].q2 = w.queue2;
 			qc[j].w = &w;
 			qc[j].seedex_mut = seedex_mut;
+			qc[j].seedex_buf_mut = &seedex_buf_mut[j];
 			qc[j].tid = j;
 			qc[j].done = &fpga_done_threads;
 #ifdef ENABLE_FPGA
 			qc[j].pci_conn.write_fd = initialize_write_queue(0,j);
-			qc[j].read_fd = initialize_read_queue(0,j);
-			qc[j].pci_bar_handle = initialize_ocl_bus(0);
+			qc[j].pci_conn.read_fd = initialize_read_queue(0,j);
+			qc[j].pci_conn.pci_bar_handle = initialize_ocl_bus(0);
 #endif
 		}
 
@@ -3976,6 +3984,7 @@ void mem_process_seqs(mem_opt_t *opt,
     for (int i = 0; i < opt->n_threads; ++i)
         w.aux[i] = smem_aux_init();
 	// kt_for(worker1, &w, n_); // BSW
+	uint64_t tim_bsw = __rdtsc();
 	kt_for(fpga_worker1, qc, n_); // BSW
 	// pthread_t s1, s2[NUM_FPGA_THREADS], s3[opt->n_threads];
 	// fprintf(stderr, "[%0.4d] 3.1. Calling bsw preprocess [%d threads]\n", myrank, NUM_W1_THREADS);
@@ -3992,6 +4001,7 @@ void mem_process_seqs(mem_opt_t *opt,
 	for (int j = 0; j < opt->n_threads; ++j) pthread_join (s3[j], NULL);
 	tprof[POST_SWA][0] += __rdtsc() - tim_pp;
 #endif
+	tprof[MEM_ALN2_B][0] += __rdtsc() - tim_bsw;
 
 	queue_t *qe;
 	queueDelete (w.queue1);
@@ -4000,7 +4010,9 @@ void mem_process_seqs(mem_opt_t *opt,
 	pthread_mutex_destroy (seedex_mut);
 	pthread_mutex_destroy (fpga_read_mut);
 	pthread_mutex_destroy (fpga_write_mut);
+	for (int j = 0; j < NUM_FPGA_THREADS; ++j) pthread_mutex_destroy (&seedex_buf_mut[j]);
 	free(seedex_mut);
+	free(seedex_buf_mut);
 
 
     for (int i = 0; i < opt->n_threads; ++i)
@@ -4033,7 +4045,7 @@ void mem_process_seqs(mem_opt_t *opt,
 		for (int j = 0; j < NUM_FPGA_THREADS; ++j) {
 			close_read_queue(qc[j].pci_conn.read_fd);
 			close_write_queue(qc[j].pci_conn.write_fd);
-    		close_ocl_bus(qc[j].pci_bar_handle);
+    			close_ocl_bus(qc[j].pci_conn.pci_bar_handle);
 		}
 #endif
 
