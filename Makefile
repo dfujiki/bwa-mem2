@@ -73,6 +73,19 @@ else
 	CXXFLAGS += -O3
 endif
 
+ifdef FPGA
+	LIBS += -lfpga_mgmt
+	OBJS += src/dma_common.o
+	CXXFLAGS += -DENABLE_FPGA
+	INCLUDES += -I${SDK_DIR}/userspace/include
+	CFLAGS += -DENABLE_FPGA ${INCLUDES}
+endif
+ifdef BATCH
+	DFLAGS += -DBATCH_LINE_LIMIT=${BATCH}
+else
+	DFLAGS += -DBATCH_LINE_LIMIT=16384
+endif
+
 .PHONY:all clean depend multi
 .SUFFIXES:.cpp .o
 
@@ -123,6 +136,7 @@ src/bwamem_pair.o: src/kswv.h
 src/bwtbuild.o: src/sais.h src/utils.h src/bntseq.h
 src/bwtindex.o: src/bntseq.h src/bwa.h src/bwt.h src/macro.h src/utils.h
 src/bwtindex.o: src/bwtbuild.h
+src/dma_common.o: src/dma_common.h
 src/fastmap.o: src/fastmap.h src/bwa.h src/bntseq.h src/bwt.h src/macro.h
 src/fastmap.o: src/bwamem.h src/kthread.h src/bandedSWA.h src/kstring.h
 src/fastmap.o: src/ksw.h src/kvec.h src/ksort.h src/utils.h src/profiling.h
