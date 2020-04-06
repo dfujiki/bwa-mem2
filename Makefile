@@ -66,7 +66,12 @@ else ifneq ($(arch),)
 	ARCH_FLAGS=$(arch)
 endif
 
-CXXFLAGS=	-g -O3 -fpermissive $(ARCH_FLAGS) #-Wall ##-xSSE2
+CXXFLAGS=	-g -fpermissive $(ARCH_FLAGS) --std=c++11 #-Wall ##-xSSE2
+ifeq ($(DEBUG),1)
+	CXXFLAGS += -O0
+else
+	CXXFLAGS += -O3
+endif
 
 .PHONY:all clean depend multi
 .SUFFIXES:.cpp .o

@@ -52,6 +52,11 @@ Authors: Vasimuddin Md <vasimuddin.md@intel.com>; Sanchit Misra <sanchit.misra@i
 #include "macro.h"
 #include "profiling.h"
 #include "FMI_search.h"
+#ifdef ENABLE_FPGA
+#include "dma_common.h"
+#include <fpga_pci.h>
+#include <fpga_mgmt.h>
+#endif
 
 #define MEM_MAPQ_COEF 30.0
 #define MEM_MAPQ_MAX  60
@@ -152,6 +157,7 @@ typedef struct mem_alnreg_t {
 } mem_alnreg_t;
 
 typedef struct { size_t n, m; mem_alnreg_t *a; } mem_alnreg_v;
+typedef struct { size_t n, m; mem_alnreg_v *a; } mem_alnreg_v_v;
 
 typedef struct {
 	int low, high;   // lower and upper bounds within which a read pair is considered to be properly paired
@@ -198,6 +204,27 @@ typedef struct {
 	uint8_t *enc_qdb;
 } mem_cache;
 
+class fpga_data_tx;
+typedef struct{
+	bseq1_t *seqs;
+	mem_alnreg_v * regs;
+	mem_chain_v * chains;
+	int64_t num;
+	int64_t starting_read_id;
+	fpga_data_tx *f1v;
+
+	// For loading
+	int last_entry;
+} queue_t;
+
+typedef struct {
+	queue_t **buf;
+	long head, tail;
+	int full, empty;
+	pthread_mutex_t *mut;
+	pthread_cond_t *notFull, *notEmpty;
+} queue;
+
 // chain moved to .h
 typedef struct worker_t {
 	const mem_opt_t *opt;
@@ -208,6 +235,7 @@ typedef struct worker_t {
 	bseq1_t *seqs;
 	mem_alnreg_v *regs;
 	int64_t n_processed;
+	int64_t n_;
 	mem_chain_v *chain_ar;
 	mem_cache mmc;
 	int64_t size;
@@ -215,10 +243,35 @@ typedef struct worker_t {
     int64_t seedBufSize;
     mem_seed_t *auxSeedBuf;
     int64_t auxSeedBufSize;
+	queue *queue1;
+	queue *queue2;
 } worker_t;
 
+typedef struct {
+	const mem_opt_t *opt;
+	const bwt_t *bwt;
+	const bntseq_t *bns;
+	const uint8_t *pac;
+	const mem_pestat_t *pes;
+	queue *queue1;
+} worker2_t;
 
 typedef kvec_t(int) int_v;
+
+#ifndef ENABLE_FPGA
+typedef int pci_bar_handle_t;
+// typedef int fpga_pci_conn;
+
+typedef struct {
+    int write_fd;
+    int read_fd;
+    pci_bar_handle_t pci_bar_handle;
+} fpga_pci_data_t;
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 smem_i *smem_itr_init(const bwt_t *bwt);
 void smem_itr_destroy(smem_i *itr);
@@ -246,6 +299,10 @@ void mem_aln2sam(const mem_opt_t *opt, const bntseq_t *bns, kstring_t *str, bseq
 static inline int get_rlen(int n_cigar, const uint32_t *cigar);
 static inline int infer_bw(int l1, int l2, int score, int a, int q, int r);
 
+static inline int cal_max_gap(const mem_opt_t *opt, int qlen);
+#ifdef __cplusplus
+}
+#endif
 int mem_kernel1_core(const mem_opt_t *opt,
 					 const bntseq_t *bns,
 					 const uint8_t *pac,

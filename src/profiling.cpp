@@ -153,6 +153,14 @@ int display_stats()
 	fprintf(stderr, "\t\tBSW time, avg: %0.2lf, (%0.2lf, %0.2lf)\n",
 			avg*1.0/proc_freq, max*1.0/proc_freq, min*1.0/proc_freq);
 
+	find_opt(tprof[MEM_ALN2_A], nthreads, &max, &min, &avg);
+	fprintf(stderr, "\t\tBSW prep time, avg: %0.2lf, (%0.2lf, %0.2lf)\n",
+			avg*1.0/proc_freq, max*1.0/proc_freq, min*1.0/proc_freq);
+
+	find_opt(tprof[POST_SWA], 1, &max, &min, &avg);
+	fprintf(stderr, "\t\tBSW postprocess time, avg: %0.2lf, (%0.2lf, %0.2lf)\n",
+			avg*1.0/proc_freq, max*1.0/proc_freq, min*1.0/proc_freq);
+
 	int agg1 = 0, agg2 = 0, agg3 = 0;
 	for (int i=0; i<nthreads; i++) {
 		agg1 += tprof[PE11][i];

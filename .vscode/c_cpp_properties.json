@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "defines": [
+                "DEB=0",
+                "RDT=0",
+                "MAXI=0",
+                "NEW=1",
+                "SORT_PAIRS=0",
+                "PAIRED_END=1",
+                "MAINY=0",
+                "SAIS=1",
+                "ENABLE_PREFETCH",
+                "__AVX2__"
+            ],
+            "intelliSenseMode": "gcc-x64",
+            "compilerPath": "/usr/local/bin/clang",
+            "cStandard": "c11",
+            "cppStandard": "c++14"
+        }
+    ],
+    "version": 4
+}
