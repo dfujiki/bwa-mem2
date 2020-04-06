@@ -65,7 +65,7 @@ KSORT_INIT(mem_intv1, SMEM, intv_lt1)  // debug
 			int tcnt = 0;
 
 // #define VERIFICATION
-#define POSTPROCESS_TH_C
+// #define POSTPROCESS_TH_C
 
 #define	MEM_16G		(1ULL << 34)
 #ifndef BATCH_LINE_LIMIT
@@ -76,6 +76,7 @@ KSORT_INIT(mem_intv1, SMEM, intv_lt1)  // debug
 #define MIN(x,y)    ((x < y)? x : y)
 typedef fpga_pci_data_t fpga_pci_conn;
 #define NUM_FPGA_THREADS	4
+#define NUM_W1_THREADS	4
 #define BW			41
 
 // #ifdef __cplusplus
@@ -1316,7 +1317,7 @@ void read_scores_from_fpga(const worker_t *w, fpga_pci_conn * fpga_pci_local,que
 		size_t read_buffer_size = total_lines * 64;
 
 #ifdef ENABLE_FPGA
-		fprintf(stderr, "Reading from FPGA [addr:0x%x, len:%d]\n", channel * MEM_16G + addr, read_buffer_size);
+		printf_(0, "Reading from FPGA [addr:0x%x, len:%d]\n", channel * MEM_16G + addr, read_buffer_size);
 		// pthread_mutex_lock (fpga_read_mut);
 		uint8_t * read_buffer = read_from_fpga(fpga_pci_local->read_fd,read_buffer_size,channel * MEM_16G + addr);
 
@@ -2743,7 +2744,7 @@ void worker1_ST(void *data){
 
 	worker_t *w = slave_data->w_master;
 	queue *q = w->queue1;
-	int n_threads = w->opt->n_threads;
+	int n_threads = NUM_W1_THREADS;
 
 	int64_t i = 0;
 	int j = 0;
@@ -2886,18 +2887,18 @@ void worker1_MT(void *data){
 	queue *q = w->queue1;
 	int i = 0;
 
-	pthread_t *w1_slaves = (pthread_t*)malloc(w->opt->n_threads * sizeof(pthread_t));
-	worker_slave_t **slaves = (worker_slave_t**)malloc(w->opt->n_threads * sizeof(worker_slave_t*));
+	pthread_t *w1_slaves = (pthread_t*)malloc(NUM_W1_THREADS * sizeof(pthread_t));
+	worker_slave_t **slaves = (worker_slave_t**)malloc(NUM_W1_THREADS * sizeof(worker_slave_t*));
 
 
-	for(i = 0;i<w->opt->n_threads;i++){
+	for(i = 0;i<NUM_W1_THREADS;i++){
 		slaves[i] = (worker_slave_t*)malloc(sizeof(worker_slave_t));
 		slaves[i]->w_master = w;
 		slaves[i]->tid = i;
 		pthread_create (&w1_slaves[i], NULL, worker1_ST, slaves[i]);
 	}
 
-	for(i = 0;i<w->opt->n_threads;i++){
+	for(i = 0;i<NUM_W1_THREADS;i++){
 		pthread_join (w1_slaves[i], NULL);
 		free(slaves[i]);
 	}
@@ -3011,7 +3012,7 @@ static void fpga_worker(void *data){
 				//  	do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
 				// }	
 				rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,0,vdip);
-				fprintf(stderr, "--> L%d:st FPGA Status 0x%x --> 0x%x\n", tid, vled, vdip);
+				printf_(0, "--> L%d:st FPGA Status 0x%x --> 0x%x\n", tid, vled, vdip);
 
 				clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start);
 				while(1) {
@@ -3041,7 +3042,7 @@ static void fpga_worker(void *data){
 					}
 				}
 
-				fprintf(stderr, "Return from FPGA. Timeout:%d Tdiff:%llu\n", time_out, timediff);
+				printf_(0, "Return from FPGA. Timeout:%d Tdiff:%llu\n", time_out, timediff);
 				pthread_mutex_unlock (qc->seedex_mut);
 
 				if(time_out == 0){
@@ -3087,7 +3088,7 @@ static void fpga_worker(void *data){
 					// 	fprintf(stderr, "[FPGA status] 0x%x waiting for ready...", vled);
 					// 	do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
 					// }	
-					fprintf(stderr, "--> R%d:st FPGA Status 0x%x --> 0x%x\n", tid, vled, vdip);
+					printf_(0, "--> R%d:st FPGA Status 0x%x --> 0x%x\n", tid, vled, vdip);
 					fpga_exec_cnt++;
 
 					// PCI Poke can be used for writing small amounts of data on the OCL bus
@@ -3121,7 +3122,7 @@ static void fpga_worker(void *data){
 						}
 					}
 
-					fprintf(stderr, "Return from FPGA. Timeout:%d Tdiff:%llu\n", time_out, timediff);
+					printf_(0, "Return from FPGA. Timeout:%d Tdiff:%llu\n", time_out, timediff);
 					pthread_mutex_unlock (qc->seedex_mut);
 
 					if(time_out == 0){
@@ -3598,20 +3599,21 @@ void mem_process_seqs(mem_opt_t *opt,
         w.aux[i] = smem_aux_init();
 	// kt_for(worker1, &w, n_); // BSW
 	pthread_t s1, s2[NUM_FPGA_THREADS], s3[opt->n_threads];
-	fprintf(stderr, "[%0.4d] 3.1. Calling bsw preprocess\n", myrank);
+	fprintf(stderr, "[%0.4d] 3.1. Calling bsw preprocess [%d threads]\n", myrank, NUM_W1_THREADS);
 	pthread_create (&s1, NULL, worker1_MT, &w);
-	fprintf(stderr, "[%0.4d] 3.2. Calling bsw worker\n", myrank);
+	fprintf(stderr, "[%0.4d] 3.2. Calling bsw worker [%d threads]\n", myrank, NUM_FPGA_THREADS);
 	for (int j = 0; j < NUM_FPGA_THREADS; ++j) pthread_create (&s2[j], NULL, fpga_worker, &qc[j]);
 	pthread_join (s1, NULL);
 	for (int j = 0; j < NUM_FPGA_THREADS; ++j) pthread_join (s2[j], NULL);
 
 #ifdef POSTPROCESS_TH_C
-	fprintf(stderr, "[%0.4d] 3.3. Calling bsw postprocess\n", myrank);
+	fprintf(stderr, "[%0.4d] 3.3. Calling bsw postprocess [%d threads]\n", myrank, w.opt->n_threads);
 	uint64_t tim_pp = __rdtsc();
 	for (int j = 0; j < opt->n_threads; ++j) pthread_create (&s3[j], NULL, worker2_MT, &w);
 	for (int j = 0; j < opt->n_threads; ++j) pthread_join (s3[j], NULL);
 	tprof[POST_SWA][0] += __rdtsc() - tim_pp;
 #endif
+
 	queue_t *qe;
 	queueDelete (w.queue1);
 	queueDelete (w.queue2);
