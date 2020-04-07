@@ -75,7 +75,7 @@ KSORT_INIT(mem_intv1, SMEM, intv_lt1)  // debug
 #define TIMEOUT     QUEUE_BATCH_SIZE*100*1000      // Nanoseconds
 #define MIN(x,y)    ((x < y)? x : y)
 typedef fpga_pci_data_t fpga_pci_conn;
-#define NUM_FPGA_THREADS	4
+#define NUM_FPGA_THREADS	3
 #define NUM_FPGA_CHANNELS	3
 #define NUM_W1_THREADS	4
 #define BW			41
@@ -3295,7 +3295,8 @@ static void fpga_worker(void *data){
 
 static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_t *qe) {
 	const int mbatch_id = qe->tid % NUM_FPGA_THREADS;
-	const int channel = (qe->tid/NUM_FPGA_THREADS) % NUM_FPGA_CHANNELS;
+	const int channel = 0;// ((qe->tid/NUM_FPGA_THREADS) % NUM_FPGA_CHANNELS);
+	const int reg_addr = channel * 4;
 
 	uint32_t vled;
 	uint32_t vdip;
@@ -3334,7 +3335,7 @@ static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_
 				vdip = mbatch_id + 1;
 
 				pthread_mutex_lock (qe->seedex_mut);
-				fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
+				fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled);
 				fpga_exec_cnt++;
 
 				// PCI Poke can be used for writing small amounts of data on the OCL bus
@@ -3342,17 +3343,17 @@ static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_
 				// 	fprintf(stderr, "[FPGA status] 0x%x waiting for ready...", vled);
 				//  	do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
 				// }	
-				rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
+				rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,reg_addr,vdip);
 				printf_(0, "--> L%d:st FPGA Status 0x%x --> 0x%x\n", mbatch_id, vled, vdip);
 
 				clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start);
 				while(1) {
 
-					rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
+					rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled);
 
 					if(vled == 0x10)  {
 						vdip = 0x0000;
-						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
+						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,reg_addr,vdip);
 						break;
 					}
 
@@ -3363,11 +3364,11 @@ static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_
 							fprintf(stderr,"Going into timeout mode\n");
 							fprintf(stderr,"Starting : %ld\n",qe->starting_read_id);
 						}
-						fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
-						fprintf(stderr, "TO:::FPGA Status 0x%x\n", vled);
+						fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled);
+						fprintf(stderr, "TO:::FPGA Batch%d Status 0x%x\n", mbatch_id, vled);
 						vdip = 0xffffffff;
-						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
-						do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled); } while (vled != 0x0);
+						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,reg_addr,vdip);
+						do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled); } while (vled != 0x0);
 						time_out = 1;
 						break;
 					}
@@ -3414,7 +3415,7 @@ static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_
 
 					pthread_mutex_lock (qe->seedex_mut);
 
-					fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
+					fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled);
 					// if (vled != 0x0) {
 					// 	fprintf(stderr, "[FPGA status] 0x%x waiting for ready...", vled);
 					// 	do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
@@ -3423,16 +3424,16 @@ static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_
 					fpga_exec_cnt++;
 
 					// PCI Poke can be used for writing small amounts of data on the OCL bus
-					rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
+					rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,reg_addr,vdip);
 
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start);
 					while(1) {
 
-						rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
+						rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled);
 
 						if(vled == 0x10)  {
 							vdip = 0x0000;
-							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
+							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,reg_addr,vdip);
 							break;
 						}
 
@@ -3443,11 +3444,11 @@ static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_
 								fprintf(stderr,"Going into timeout mode\n");
 								fprintf(stderr,"Starting : %ld\n",qe->starting_read_id);
 							}
-							fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
-							fprintf(stderr, "TO:::FPGA Status 0x%x\n", vled);
+							fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled);
+							fprintf(stderr, "TO:::FPGA Batch%d Status 0x%x\n", mbatch_id, vled);
 							vdip = 0xffffffff;
-							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
-							do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled); } while (vled != 0x0);
+							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,reg_addr,vdip);
+							do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,reg_addr,&vled); } while (vled != 0x0);
 							time_out = 1;
 							break;
 						}
@@ -3651,7 +3652,8 @@ static void fpga_worker1(void *data, int seq_id, int batch_size, int tid){
 	qe.num = batch_size;
 	qe.last_entry = 0;
 	qe.starting_read_id = seq_id;
-	qe.seedex_mut = &qc->seedex_mut[(tid/NUM_FPGA_THREADS)%NUM_FPGA_CHANNELS];
+	// qe.seedex_mut = &qc->seedex_mut[(tid/NUM_FPGA_THREADS)%NUM_FPGA_CHANNELS];
+	qe.seedex_mut = &qc->seedex_mut[0];
 	qe.seedex_buf_mut = &qc->seedex_buf_mut[tid%NUM_FPGA_THREADS];
 	qe.tid = tid;
 
@@ -3942,7 +3944,7 @@ void mem_process_seqs(mem_opt_t *opt,
 
 		// SeedEx Mutex
 		pthread_mutex_t *seedex_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t) * NUM_FPGA_CHANNELS);
-		for (int j = 0; j < NUM_FPGA_CHANNELS; ++j) pthread_mutex_init (seedex_mut, NULL);
+		for (int j = 0; j < NUM_FPGA_CHANNELS; ++j) pthread_mutex_init (&seedex_mut[j], NULL);
 
 		// SeedEx Buf Mutex
 		pthread_mutex_t *seedex_buf_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t) * NUM_FPGA_THREADS);
