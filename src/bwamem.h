@@ -213,6 +213,9 @@ typedef struct{
 	int64_t starting_read_id;
 	fpga_data_tx *f1v;
 
+	pthread_mutex_t *seedex_mut;
+	pthread_mutex_t *seedex_buf_mut;
+	int tid;
 	// For loading
 	int last_entry;
 } queue_t;

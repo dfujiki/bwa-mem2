@@ -76,6 +76,7 @@ KSORT_INIT(mem_intv1, SMEM, intv_lt1)  // debug
 #define MIN(x,y)    ((x < y)? x : y)
 typedef fpga_pci_data_t fpga_pci_conn;
 #define NUM_FPGA_THREADS	4
+#define NUM_FPGA_CHANNELS	3
 #define NUM_W1_THREADS	4
 #define BW			41
 
@@ -3292,9 +3293,9 @@ static void fpga_worker(void *data){
 
 
 
-static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queue_t *qe) {
-	worker_t * w = qc->w;
-	const int tid = qc->tid % NUM_FPGA_THREADS;
+static void fpga_worker_core(worker_t * w, fpga_pci_conn *fpga_pci_local, queue_t *qe) {
+	const int mbatch_id = qe->tid % NUM_FPGA_THREADS;
+	const int channel = (qe->tid/NUM_FPGA_THREADS) % NUM_FPGA_CHANNELS;
 
 	uint32_t vled;
 	uint32_t vdip;
@@ -3324,16 +3325,16 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 				// memset(load_buffer + load_buffer_size,0,write_buffer_capacity);
 
 #ifdef ENABLE_FPGA
-	pthread_mutex_lock (qc->seedex_buf_mut);
+	pthread_mutex_lock (qe->seedex_buf_mut);
 				// pthread_mutex_lock (fpga_write_mut);
-				write_to_fpga(fpga_pci_local->write_fd,(uint8_t*)load_buffer1.data(),load_buffer1.size() * sizeof(union SeedExLine),BATCH_LINE_LIMIT*64*(tid));
+				write_to_fpga(fpga_pci_local->write_fd,(uint8_t*)load_buffer1.data(),load_buffer1.size() * sizeof(union SeedExLine),channel * MEM_16G + BATCH_LINE_LIMIT*64*(mbatch_id));
 				// pthread_mutex_unlock (fpga_write_mut);
 
 				// vdip = 0x0001;
-				vdip = tid + 1;
+				vdip = mbatch_id + 1;
 
-				pthread_mutex_lock (qc->seedex_mut);
-				fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled);
+				pthread_mutex_lock (qe->seedex_mut);
+				fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
 				fpga_exec_cnt++;
 
 				// PCI Poke can be used for writing small amounts of data on the OCL bus
@@ -3341,17 +3342,17 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 				// 	fprintf(stderr, "[FPGA status] 0x%x waiting for ready...", vled);
 				//  	do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
 				// }	
-				rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,0,vdip);
-				printf_(0, "--> L%d:st FPGA Status 0x%x --> 0x%x\n", tid, vled, vdip);
+				rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
+				printf_(0, "--> L%d:st FPGA Status 0x%x --> 0x%x\n", mbatch_id, vled, vdip);
 
 				clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start);
 				while(1) {
 
-					rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled);
+					rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
 
 					if(vled == 0x10)  {
 						vdip = 0x0000;
-						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,0,vdip);
+						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
 						break;
 					}
 
@@ -3362,22 +3363,22 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 							fprintf(stderr,"Going into timeout mode\n");
 							fprintf(stderr,"Starting : %ld\n",qe->starting_read_id);
 						}
-						fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled);
+						fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
 						fprintf(stderr, "TO:::FPGA Status 0x%x\n", vled);
 						vdip = 0xffffffff;
-						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,0,vdip);
-						do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
+						rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
+						do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled); } while (vled != 0x0);
 						time_out = 1;
 						break;
 					}
 				}
 
 				printf_(0, "Return from FPGA. Timeout:%d Tdiff:%llu\n", time_out, timediff);
-				pthread_mutex_unlock (qc->seedex_mut);
+				pthread_mutex_unlock (qe->seedex_mut);
 
 				if(time_out == 0){
 					f1v.read_right = false;
-					read_scores_from_fpga(w, fpga_pci_local,qe,&f1v,0, BATCH_LINE_LIMIT*64*4 + (tid) * BATCH_LINE_LIMIT/4*64, extension_meta, qe->f1v->alnregs);
+					read_scores_from_fpga(w, fpga_pci_local,qe,&f1v,0, channel * MEM_16G + BATCH_LINE_LIMIT*64*4 + (mbatch_id) * BATCH_LINE_LIMIT/4*64, extension_meta, qe->f1v->alnregs);
 				}
 #else
 				LoadBufferTy read_buffer(BATCH_LINE_LIMIT/4);
@@ -3405,33 +3406,33 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 				if (time_out == 0) {
 					// right ext
 					// pthread_mutex_lock (fpga_write_mut);
-					write_to_fpga(fpga_pci_local->write_fd,(uint8_t*)load_buffer2.data(),load_buffer2.size() * sizeof(union SeedExLine),BATCH_LINE_LIMIT*64*(tid));
+					write_to_fpga(fpga_pci_local->write_fd,(uint8_t*)load_buffer2.data(),load_buffer2.size() * sizeof(union SeedExLine),channel * MEM_16G + BATCH_LINE_LIMIT*64*(mbatch_id));
 					// pthread_mutex_unlock (fpga_write_mut);
 
 					// vdip = 0x0001;
-					vdip = tid + 1;
+					vdip = mbatch_id + 1;
 
-					pthread_mutex_lock (qc->seedex_mut);
+					pthread_mutex_lock (qe->seedex_mut);
 
-					fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled);
+					fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
 					// if (vled != 0x0) {
 					// 	fprintf(stderr, "[FPGA status] 0x%x waiting for ready...", vled);
 					// 	do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
 					// }	
-					printf_(0, "--> R%d:st FPGA Status 0x%x --> 0x%x\n", tid, vled, vdip);
+					printf_(0, "--> R%d:st FPGA Status 0x%x --> 0x%x\n", mbatch_id, vled, vdip);
 					fpga_exec_cnt++;
 
 					// PCI Poke can be used for writing small amounts of data on the OCL bus
-					rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,0,vdip);
+					rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
 
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start);
 					while(1) {
 
-						rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled);
+						rc = fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
 
 						if(vled == 0x10)  {
 							vdip = 0x0000;
-							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,0,vdip);
+							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
 							break;
 						}
 
@@ -3442,25 +3443,25 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 								fprintf(stderr,"Going into timeout mode\n");
 								fprintf(stderr,"Starting : %ld\n",qe->starting_read_id);
 							}
-							fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled);
+							fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled);
 							fprintf(stderr, "TO:::FPGA Status 0x%x\n", vled);
 							vdip = 0xffffffff;
-							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,0,vdip);
-							do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,0,&vled); } while (vled != 0x0);
+							rc = fpga_pci_poke(fpga_pci_local->pci_bar_handle,channel,vdip);
+							do { fpga_pci_peek(fpga_pci_local->pci_bar_handle,channel,&vled); } while (vled != 0x0);
 							time_out = 1;
 							break;
 						}
 					}
 
 					printf_(0, "Return from FPGA. Timeout:%d Tdiff:%llu\n", time_out, timediff);
-					pthread_mutex_unlock (qc->seedex_mut);
+					pthread_mutex_unlock (qe->seedex_mut);
 
 					if(time_out == 0){
 						f1v.read_right = true;
-						read_scores_from_fpga(w, fpga_pci_local,qe,&f1v,0, BATCH_LINE_LIMIT*64*4 + (tid) * BATCH_LINE_LIMIT/4*64, extension_meta, qe->f1v->alnregs);
+						read_scores_from_fpga(w, fpga_pci_local,qe,&f1v,0, channel * MEM_16G + BATCH_LINE_LIMIT*64*4 + (mbatch_id) * BATCH_LINE_LIMIT/4*64, extension_meta, qe->f1v->alnregs);
 					}
 				}
-	pthread_mutex_unlock (qc->seedex_buf_mut);
+	pthread_mutex_unlock (qe->seedex_buf_mut);
 
 #else
 				read_buffer.clear();
@@ -3590,10 +3591,7 @@ static void fpga_worker_core(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queu
 
 }
 
-void fpga_packager(queue_coll *qc, fpga_pci_conn *fpga_pci_local, queue_t *qe) {
-	worker_t * w = qc->w;
-	const int tid = qc->tid;
-
+void fpga_packager(worker_t * w, queue_t *qe) {
 	int64_t i = 0;
 	int j = 0;
 
@@ -3653,13 +3651,16 @@ static void fpga_worker1(void *data, int seq_id, int batch_size, int tid){
 	qe.num = batch_size;
 	qe.last_entry = 0;
 	qe.starting_read_id = seq_id;
+	qe.seedex_mut = &qc->seedex_mut[(tid/NUM_FPGA_THREADS)%NUM_FPGA_CHANNELS];
+	qe.seedex_buf_mut = &qc->seedex_buf_mut[tid%NUM_FPGA_THREADS];
+	qe.tid = tid;
 
 	uint64_t tim = __rdtsc();
-	fpga_packager(qc, fpga_pci_local, &qe);
+	fpga_packager(w, &qe);
 	tprof[MEM_ALN2_A][tid] += __rdtsc() - tim;
 
 	tim = __rdtsc();
-	fpga_worker_core(qc, fpga_pci_local, &qe);
+	fpga_worker_core(w, fpga_pci_local, &qe);
 	tprof[MEM_ALN2][tid] += __rdtsc() - tim;
 
 }
@@ -3940,8 +3941,8 @@ void mem_process_seqs(mem_opt_t *opt,
 		w2_total_last_entries = 0;
 
 		// SeedEx Mutex
-		pthread_mutex_t *seedex_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t));
-		pthread_mutex_init (seedex_mut, NULL);
+		pthread_mutex_t *seedex_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t) * NUM_FPGA_CHANNELS);
+		for (int j = 0; j < NUM_FPGA_CHANNELS; ++j) pthread_mutex_init (seedex_mut, NULL);
 
 		// SeedEx Buf Mutex
 		pthread_mutex_t *seedex_buf_mut = (pthread_mutex_t *) malloc (sizeof (pthread_mutex_t) * NUM_FPGA_THREADS);
@@ -3958,7 +3959,7 @@ void mem_process_seqs(mem_opt_t *opt,
 			qc[j].q2 = w.queue2;
 			qc[j].w = &w;
 			qc[j].seedex_mut = seedex_mut;
-			qc[j].seedex_buf_mut = &seedex_buf_mut[j];
+			qc[j].seedex_buf_mut = seedex_buf_mut;
 			qc[j].tid = j;
 			qc[j].done = &fpga_done_threads;
 #ifdef ENABLE_FPGA
@@ -4007,7 +4008,7 @@ void mem_process_seqs(mem_opt_t *opt,
 	queueDelete (w.queue1);
 	queueDelete (w.queue2);
 
-	pthread_mutex_destroy (seedex_mut);
+	for (int j = 0; j < NUM_FPGA_CHANNELS; ++j) pthread_mutex_destroy (&seedex_mut[j]);
 	pthread_mutex_destroy (fpga_read_mut);
 	pthread_mutex_destroy (fpga_write_mut);
 	for (int j = 0; j < NUM_FPGA_THREADS; ++j) pthread_mutex_destroy (&seedex_buf_mut[j]);
